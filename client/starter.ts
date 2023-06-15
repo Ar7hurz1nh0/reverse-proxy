@@ -1,5 +1,6 @@
 import { readFileSync } from 'fs';
 import { connect, Socket } from 'net';
+import { createHash } from 'crypto';
 
 const config: {
   targets: {
@@ -44,14 +45,28 @@ socket.on('close', error => {
 })
 
 socket.on('data', data => {
-  const [header, body] = data.toString('binary').split(config.separator);
-  if (typeof header === 'undefined' || typeof body === 'undefined') {
-    console.log("[MAIN]", "Invalid packet received, ignoring")
+  const [header] = data.toString('binary').split(config.separator, 1);
+  if (typeof header === 'undefined') {
+    console.log("[MAIN]", "Invalid header, ignoring")
     return;
   }
-  const [id, port_str] = header.split(' ');
+  const body = data.subarray(header.length + config.separator.length);
+  const [id, port_str, sha1_dig, sha512_dig] = header.split(' ');
+  const body_str = body.toString('binary')
+  const sha1 = createHash('sha1').update(body_str).digest('hex');
+  const sha512 = createHash('sha512').update(body_str).digest('hex');
+  console.log("[MAIN]", "Expected:", sha1_dig, sha512_dig)
+  console.log("[MAIN]", "Got:     ", sha1, sha512)
+  if (sha1 !== sha1_dig || sha512 !== sha512_dig) {
+    console.log("[MAIN]", "Invalid checksum, ignoring")
+    return;
+  } else console.log("[MAIN]", "Checksums match")
   if (typeof id === 'undefined' || typeof port_str === 'undefined') {
-    console.log("[MAIN]", "Invalid packet received, ignoring")
+    console.log("[MAIN]", "Invalid packet, ignoring")
+    if (typeof id === 'undefined')
+      console.log("[MAIN]", "Invalid id, ignoring")
+    if (typeof port_str === 'undefined')
+      console.log("[MAIN]", "Invalid port, ignoring")
     return;
   }
   const port = parseInt(port_str);
@@ -70,5 +85,7 @@ socket.on('data', data => {
       connections.delete(id)
     })
   }
-  connections.get(id)?.write(body)
+  const success = connections.get(id)?.write(body)
+  if (success) console.log(`[CONN_${port}/${id}]`, "Successfully flushed buffer to target")
+  else console.log(`[CONN_${port}/${id}]`, "Failed to flush buffer to target:", success)
 })

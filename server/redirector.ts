@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import { createServer, Socket } from 'net';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 
 const config: {
   auth: string;
@@ -15,7 +15,10 @@ const servers = new Map<number, ReturnType<typeof createServer>>();
 const connections: Map<string, Socket> = new Map();
 
 function appendHeader(data: Buffer, id: ReturnType<typeof randomUUID>, port: number): Buffer {
-  const header = Buffer.from(`${id} ${port}${config.separator}`);
+  const string_format = data.toString('binary');
+  const sha1 = createHash('sha1').update(string_format).digest('hex');
+  const sha512 = createHash('sha512').update(string_format).digest('hex');
+  const header = Buffer.from(`${id} ${port} ${sha1} ${sha512}${config.separator}`);
   return Buffer.concat([header, data]);
 }
 
@@ -56,6 +59,11 @@ starter.on('connection', main_socket => {
             console.log(`[SOCKET_${port}]`, "Closing connection", id)
             connections.delete(id);
           })
+
+          socket.on('timeout', () => {
+            console.log(`[SOCKET_${port}]`, "Connection timed out", id)
+            socket.end();
+          })
         })
 
         server.listen(port, '0.0.0.0', 50, () => {
@@ -64,7 +72,7 @@ starter.on('connection', main_socket => {
       }
     }
     else {
-      const packet = data.toString('utf8').split(config.separator);
+      const packet = data.toString('binary').split(config.separator);
       if (typeof packet[0] === "undefined" || packet[0] === "") {
         console.log("[MAIN]", "Invalid packet, ignoring")
         return;
@@ -95,6 +103,10 @@ starter.on('connection', main_socket => {
         console.log(`[SOCKET_${port}]`, "Closed socket")
       })
     })
+  })
+  main_socket.on('timeout', () => {
+    console.log("[MAIN]", "Client timed out, closing connection");
+    main_socket.end();
   })
 })
 
