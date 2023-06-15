@@ -21,7 +21,10 @@ function onConnect(s?: Socket): void {
 }
 
 function appendHeader(data: Buffer, id: string): Buffer {
-  const header = Buffer.from(`${id}${config.separator}`);
+  const string_format = data.toString('binary');
+  const sha1 = createHash('sha1').update(string_format).digest('hex');
+  const sha512 = createHash('sha512').update(string_format).digest('hex');
+  const header = Buffer.from(`${id} ${sha1} ${sha512}${config.separator}`);
   return Buffer.concat([header, data]);
 }
 
@@ -51,12 +54,14 @@ socket.on('data', data => {
     return;
   }
   const body = data.subarray(header.length + config.separator.length);
-  const [id, port_str, sha1_dig, sha512_dig] = header.split(' ');
+  const [id, port_str, sha1_dig, sha512_dig] = header.split(' ', 4);
   const body_str = body.toString('binary')
   const sha1 = createHash('sha1').update(body_str).digest('hex');
   const sha512 = createHash('sha512').update(body_str).digest('hex');
-  console.log("[MAIN]", "Expected:", sha1_dig, sha512_dig)
-  console.log("[MAIN]", "Got:     ", sha1, sha512)
+  console.log(`[CONN_${port_str}/${id}]`, "Expected:", sha1_dig)
+  console.log(`[CONN_${port_str}/${id}]`, "Got:     ", sha1)
+  console.log(`[CONN_${port_str}/${id}]`, "Expected:", sha512_dig)
+  console.log(`[CONN_${port_str}/${id}]`, "Got:     ", sha512)
   if (sha1 !== sha1_dig || sha512 !== sha512_dig) {
     console.log("[MAIN]", "Invalid checksum, ignoring")
     return;
@@ -76,16 +81,62 @@ socket.on('data', data => {
       console.log(`[CONN_${port}/${id}]`, `Connected to target`)
     })
     connections.set(id, conn_socket)
+
     conn_socket.on('data', data => {
       console.log(`[CONN_${port}/${id}]`, "Received data from target")
       socket.write(appendHeader(data, id))
     })
+
     conn_socket.on('close', () => {
       console.log(`[CONN_${port}/${id}]`, "Closing connection")
       connections.delete(id)
+    })
+
+    conn_socket.on('error', data => {
+      console.log(`[CONN_${port}/${id}]`, data.message ?? data)
+    })
+
+    conn_socket.on('end', () => {
+      conn_socket.destroy();
+      console.log(`[CONN_${port}/${id}]`, "Connection destroyed")
+    })
+
+    conn_socket.on('timeout', () => {
+      console.log(`[CONN_${port}/${id}]`, "Target timed out, ending connection")
+      conn_socket.end();
+    })
+
+    conn_socket.on('drain', () => {
+      console.log(`[CONN_${port}/${id}]`, "Target drained buffer")
+    })
+
+    conn_socket.on('ready', () => {
+      console.log(`[CONN_${port}/${id}]`, "Target ready")
     })
   }
   const success = connections.get(id)?.write(body)
   if (success) console.log(`[CONN_${port}/${id}]`, "Successfully flushed buffer to target")
   else console.log(`[CONN_${port}/${id}]`, "Failed to flush buffer to target:", success)
+})
+
+socket.on('end', () => {
+  socket.destroy();
+  console.log("[MAIN]", "Server destroyed")
+})
+
+socket.on('timeout', () => {
+  console.log("[MAIN]", "Server timed out, ending connection")
+  socket.end();
+})
+
+socket.on('drain', () => {
+  console.log("[MAIN]", "Server drained buffer")
+})
+
+socket.on('ready', () => {
+  console.log("[MAIN]", "Server ready")
+})
+
+socket.on('error', data => {
+  console.log("[MAIN]", data.message ?? data)
 })

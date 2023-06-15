@@ -8,7 +8,8 @@ const config: {
   listen: number;
 } = JSON.parse(readFileSync('config.json', 'utf8'));
 
-const starter = createServer();
+const BACKLOG = 100;
+const redirector = createServer();
 let ports: null | number[] = null;
 
 const servers = new Map<number, ReturnType<typeof createServer>>();
@@ -22,7 +23,7 @@ function appendHeader(data: Buffer, id: ReturnType<typeof randomUUID>, port: num
   return Buffer.concat([header, data]);
 }
 
-starter.on('connection', main_socket => {
+redirector.on('connection', main_socket => {
   console.log("[MAIN]", "Received connection from", main_socket.remoteAddress)
   main_socket.on('data', data => {
     if (ports === null) {
@@ -52,6 +53,7 @@ starter.on('connection', main_socket => {
 
           socket.on('data', data => {
             console.log(`[SOCKET_${port}]`, "Received data from", id)
+            console.log(`[SOCKET_${port}]`, id, '->', main_socket.remoteAddress)
             main_socket.write(appendHeader(data, id, port))
           });
 
@@ -66,18 +68,18 @@ starter.on('connection', main_socket => {
           })
         })
 
-        server.listen(port, '0.0.0.0', 50, () => {
+        server.listen(port, '0.0.0.0', BACKLOG, () => {
           console.log(`[SOCKET_${port}]`, "Opened socket!")
         })
       }
     }
     else {
-      const packet = data.toString('binary').split(config.separator);
-      if (typeof packet[0] === "undefined" || packet[0] === "") {
+      const [header] = data.toString('binary').split(config.separator, 1);
+      if (typeof header === "undefined" || header === "") {
         console.log("[MAIN]", "Invalid packet, ignoring")
         return;
       }
-      const id = packet[0].split(' ')[0];
+      const [id, sha1_dig, sha512_dig] = header.split(' ', 3);
       if (typeof id === "undefined" || id === "") {
         console.log("[MAIN]", "Invalid id, ignoring")
         return;
@@ -87,13 +89,27 @@ starter.on('connection', main_socket => {
         console.log("[MAIN]", "Connection was already closed, ignoring packet")
         return;
       }
-      if (typeof packet[1] === "undefined" || packet[1] === "") {
+      const body = data.subarray(header.length + config.separator.length);
+      const body_str = body.toString('binary')
+      const sha1 = createHash('sha1').update(body_str).digest('hex');
+      const sha512 = createHash('sha512').update(body_str).digest('hex');
+      console.log("[MAIN]", "Expected:", sha1_dig)
+      console.log("[MAIN]", "Got:     ", sha1)
+      console.log("[MAIN]", "Expected:", sha512_dig)
+      console.log("[MAIN]", "Got:     ", sha512)
+      if (sha1 !== sha1_dig || sha512 !== sha512_dig) {
+        console.log("[MAIN]", "Invalid checksum, ignoring")
+        return;
+      } else console.log("[MAIN]", "Checksums match")
+      if (typeof body === "undefined") {
         console.log("[MAIN]", "Invalid packet, closing connection")
         return;
       }
-      socket.write(Buffer.from(packet[1], 'binary'));
+      socket.write(body);
+      console.log("[MAIN]", main_socket.remoteAddress, '->', id)
     }
   });
+
   main_socket.on('close', error => {
     if (error) return;
     console.log("[MAIN]", "Client closed connection, restarting it");
@@ -104,12 +120,49 @@ starter.on('connection', main_socket => {
       })
     })
   })
+
   main_socket.on('timeout', () => {
     console.log("[MAIN]", "Client timed out, closing connection");
     main_socket.end();
   })
+
+  main_socket.on('error', error => {
+    console.log("[MAIN]", "Error:", error.message ?? error)
+  })
+
+  main_socket.on('drain', () => {
+    console.log("[MAIN]", "Buffer drained")
+  })
+
+  main_socket.on('ready', () => {
+    console.log("[MAIN]", "Ready")
+  })
 })
 
-starter.listen(config.listen, '0.0.0.0', 50, () => {
+redirector.listen(config.listen, '0.0.0.0', BACKLOG, () => {
   console.log("[MAIN]", "Opened socket, waiting for auth packet")
+})
+
+redirector.on('error', error => {
+  console.log("[MAIN]", "Error:", error.message ?? error)
+})
+
+redirector.on('timeout', () => {
+  console.log("[MAIN]", "Connection timed out, restarting server");
+  ports = null;
+  Array.from(servers.entries()).forEach(([port, server]) => {
+    server.close(() => {
+      console.log(`[SOCKET_${port}]`, "Closed socket")
+    })
+  })
+})
+
+redirector.on('drop', () => {
+  console.log("[MAIN]", "Connection dropped, restarting server");
+  ports = null;
+  Array.from(servers.entries()).forEach(([port, server]) => {
+    server.close(() => {
+      console.log(`[SOCKET_${port}]`, "Closed socket")
+    })
+  })
 })
