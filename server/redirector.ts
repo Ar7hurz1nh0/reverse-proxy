@@ -3,6 +3,8 @@ import { createServer, Socket } from 'node:net';
 import { randomUUID, createHash } from 'node:crypto';
 import chalk from 'chalk';
 
+chalk.level = 2;
+
 const c = {
   info: (level: string, ...message: unknown[]) => console.log(chalk`{blue [${level}]} ${message.join(' ')}`),
   warn: (level: string, ...message: unknown[]) => console.log(chalk`{yellow [${level}]} ${message.join(' ')}`),
