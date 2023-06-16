@@ -36,15 +36,17 @@ function onConnect(s?: Socket): void {
   (s ?? socket).write(config.auth + '\n' + config.targets.map(t => t.port).join(' '))
 }
 
-function appendHeader(data: Buffer, id: string): Buffer {
+function appendHeader(data: Buffer, id: string, packet_no?: number, total?: number): Buffer {
   const string_format = data.toString('binary');
   const sha1 = createHash('sha1').update(string_format).digest('hex');
   const sha512 = createHash('sha512').update(string_format).digest('hex');
-  const header = Buffer.from(`${id} ${sha1} ${sha512}${config.separator}`);
+  const header = Buffer.from(`${id} ${sha1} ${sha512}${typeof packet_no !== "undefined" ? ` ${packet_no} ${total}` : ""}${config.separator}`);
   return Buffer.concat([header, data]);
 }
 
+const MAX_PACKET_SIZE = 384;
 const connections: Map<string, Socket> = new Map();
+const shredded_packets: Map<string, Map<number, Buffer>> = new Map();
 
 c.info("MAIN", "Attempting to connect to", `${config.redirect_to.address}:${config.redirect_to.port}`)
 const socket = connect(config.redirect_to.port, config.redirect_to.address, onConnect)
@@ -70,7 +72,7 @@ socket.on('data', data => {
     return;
   }
   const body = data.subarray(header.length + config.separator.length);
-  const [id, port_str, sha1_dig, sha512_dig] = header.split(' ', 4);
+  const [id, port_str, sha1_dig, sha512_dig, packet_no, total] = header.split(' ', 4);
   const body_str = body.toString('binary')
   const sha1 = createHash('sha1').update(body_str).digest('hex');
   const sha512 = createHash('sha512').update(body_str).digest('hex');
@@ -109,10 +111,21 @@ socket.on('data', data => {
       c.debug(`CONN_${port}/${id}`, "Received data from target")
       const sha1 = createHash('sha1').update(data.toString('binary')).digest('hex');
       c.debug(`CONN_${port}/${id}/${sha1}`, "Body length:", data.length)
-      const new_body = appendHeader(data, id);
-      c.debug(`CONN_${port}/${id}/${sha1}`, "Packet length:", new_body.length)
+      if (data.length > MAX_PACKET_SIZE) {
+        c.warn(`CONN_${port}/${id}/${sha1}`, "Packet too large, splitting");
+        const packets: Buffer[] = [];
+        for (let i = 0; i < data.length; i += MAX_PACKET_SIZE) {
+          packets.push(data.subarray(i, i + MAX_PACKET_SIZE))
+        }
+        const total = packets.length;
+        packets.forEach((packet, i) => {
+          c.debug(`CONN_${port}/${id}/${sha1}`, `Sending packet ${i + 1}/${total}`)
+          const new_body = appendHeader(packet, id, i, total);
+          socket.write(new_body)
+        })
+      }
+      else socket.write(appendHeader(data, id))
       c.debug(`CONN_${port}/${id}/${sha1}`, "Sending data to client")
-      socket.write(new_body)
     })
 
     conn_socket.on('close', () => {
@@ -142,9 +155,25 @@ socket.on('data', data => {
       c.debug(`CONN_${port}/${id}`, "Target ready")
     })
   }
-  const success = connections.get(id)?.write(body)
-  if (success) c.debug(`CONN_${port}/${id}`, "Successfully flushed buffer to target")
-  else c.error(`CONN_${port}/${id}`, "Failed to flush buffer to target:", success)
+  if (typeof packet_no === "undefined" || packet_no === "") {
+    const success = connections.get(id)?.write(body)
+    if (success) c.debug(`CONN_${port}/${id}`, "Successfully flushed buffer to target")
+    else c.error(`CONN_${port}/${id}`, "Failed to flush buffer to target:", success)
+  }
+  else {
+    c.info(`SOCKET_${port}/${sha1_dig}`, "Got shredded packet", `[${packet_no}/${total}]`)
+    if (shredded_packets.has(id)) {
+      const s_packet = shredded_packets.get(id)!;
+      s_packet.set(parseInt(packet_no), body);
+      if (s_packet.size === parseInt(total!)) {
+        const packets = []
+        for (let i = 0; i < parseInt(total!); i++) {
+          packets.push(s_packet.get(i)!)
+        }
+        connections.get(id)?.write(Buffer.concat(packets));
+      }
+    } else shredded_packets.set(id, new Map([[parseInt(packet_no), body]]));
+  }
 })
 
 socket.on('end', () => {
