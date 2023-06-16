@@ -5,7 +5,7 @@
       "port": 3000
     },
     {
-      "address": "192.168.100.125",
+      "address": "localhost",
       "port": 25565
     }
   ],

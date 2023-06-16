@@ -5,11 +5,19 @@ import chalk from 'chalk';
 
 chalk.level = 2;
 
+const enum LogLevel {
+  DEBUG = 0,
+  INFO = 1,
+  WARN = 2,
+  ERROR = 3,
+}
+
 const c = {
-  info: (level: string, ...message: unknown[]) => console.log(chalk`{blue [${level}]} ${message.join(' ')}`),
-  warn: (level: string, ...message: unknown[]) => console.log(chalk`{yellow [${level}]} ${message.join(' ')}`),
-  error: (level: string, ...message: unknown[]) => console.log(chalk`{red [${level}]} ${message.join(' ')}`),
-  debug: (level: string, ...message: unknown[]) => console.log(chalk`{magenta [${level}]} ${message.join(' ')}`)
+  level: LogLevel.INFO,
+  info: (level: string, ...message: unknown[]) => c.level <= LogLevel.INFO && console.log(chalk`{blue [${level}]} ${message.join(' ')}`),
+  warn: (level: string, ...message: unknown[]) => c.level <= LogLevel.WARN && console.log(chalk`{yellow [${level}]} ${message.join(' ')}`),
+  error: (level: string, ...message: unknown[]) => c.level <= LogLevel.ERROR && console.log(chalk`{red [${level}]} ${message.join(' ')}`),
+  debug: (level: string, ...message: unknown[]) => c.level <= LogLevel.DEBUG && console.log(chalk`{magenta [${level}]} ${message.join(' ')}`)
 }
 
 const config: {
@@ -59,10 +67,10 @@ redirector.on('connection', main_socket => {
           let id = randomUUID();
           while (connections.has(id)) id = randomUUID();
           connections.set(id, socket);
-          c.info(`SOCKET_${port}`, "Assigned id:", id)
+          c.debug(`SOCKET_${port}`, "Assigned id:", id)
 
           socket.on('data', data => {
-            c.info(`SOCKET_${port}`, "Received data from", id)
+            c.debug(`SOCKET_${port}`, "Received data from", id)
             c.info(`SOCKET_${port}`, id, '->', main_socket.remoteAddress)
             main_socket.write(appendHeader(data, id, port))
           });
@@ -84,11 +92,13 @@ redirector.on('connection', main_socket => {
       }
     }
     else {
-      const [header] = data.toString('binary').split(config.separator, 1);
+      const [header, ...invalid] = data.toString('binary').split(config.separator, 1);
+      invalid.length && c.warn("MAIN", "Received invalid packet")
       if (typeof header === "undefined" || header === "") {
         c.error("MAIN", "Invalid packet, ignoring")
         return;
       }
+      c.debug("MAIN", "Header size:", header.length)
       const [id, sha1_dig, sha512_dig] = header.split(' ', 3);
       if (typeof id === "undefined" || id === "") {
         c.error("MAIN", "Invalid id, ignoring")
@@ -100,23 +110,31 @@ redirector.on('connection', main_socket => {
         return;
       }
       const body = data.subarray(header.length + config.separator.length);
+      const port = socket.localPort;
       const body_str = body.toString('binary')
       const sha1 = createHash('sha1').update(body_str).digest('hex');
       const sha512 = createHash('sha512').update(body_str).digest('hex');
-      c.info("MAIN", "Expected:", sha1_dig)
-      c.info("MAIN", "Got:     ", sha1)
-      c.info("MAIN", "Expected:", sha512_dig)
-      c.info("MAIN", "Got:     ", sha512)
+      c.debug(`SOCKET_${port}`, "Body length:", body.length)
+      c.debug(`SOCKET_${port}`, "Expected:", sha1_dig)
+      c.debug(`SOCKET_${port}`, "Got:     ", sha1)
+      c.debug(`SOCKET_${port}`, "Expected:", sha512_dig)
+      c.debug(`SOCKET_${port}`, "Got:     ", sha512)
+      c.error(`SOCKET_${port}/${sha1_dig}`, "Buffer sizes:", data.length, data.length - header.length - config.separator.length, body.length)
       if (sha1 !== sha1_dig || sha512 !== sha512_dig) {
-        c.error("MAIN", "Invalid checksum, ignoring")
+        c.error(`SOCKET_${port}`, `Invalid checksum, ignoring (${id}/${sha1_dig})`)
+        c.error(`SOCKET_${port}`, "Body length:", body.length)
+        c.error(`SOCKET_${port}`, "Expected:", sha1_dig)
+        c.error(`SOCKET_${port}`, "Got:     ", sha1)
+        c.error(`SOCKET_${port}`, "Expected:", sha512_dig)
+        c.error(`SOCKET_${port}`, "Got:     ", sha512)
         return;
-      } else c.info("MAIN", "Checksums match")
+      } else c.debug(`SOCKET_${port}`, "Checksums match")
       if (typeof body === "undefined") {
-        c.error("MAIN", "Invalid packet, closing connection")
+        c.error(`SOCKET_${port}`, "Invalid packet, closing connection")
         return;
       }
       socket.write(body);
-      c.info("MAIN", main_socket.remoteAddress, '->', id)
+      c.info(`SOCKET_${port}`, main_socket.remoteAddress, '->', id)
     }
   });
 
@@ -145,7 +163,7 @@ redirector.on('connection', main_socket => {
   })
 
   main_socket.on('ready', () => {
-    c.info("MAIN", "Ready")
+    c.debug("MAIN", "Ready")
   })
 })
 
