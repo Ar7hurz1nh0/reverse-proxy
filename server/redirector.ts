@@ -14,10 +14,10 @@ const enum LogLevel {
 
 const c = {
   level: LogLevel.INFO,
-  info: (level: string, ...message: unknown[]) => c.level <= LogLevel.INFO && console.log(chalk`{blue [${level}]} ${message.join(' ')}`),
-  warn: (level: string, ...message: unknown[]) => c.level <= LogLevel.WARN && console.log(chalk`{yellow [${level}]} ${message.join(' ')}`),
-  error: (level: string, ...message: unknown[]) => c.level <= LogLevel.ERROR && console.log(chalk`{red [${level}]} ${message.join(' ')}`),
-  debug: (level: string, ...message: unknown[]) => c.level <= LogLevel.DEBUG && console.log(chalk`{magenta [${level}]} ${message.join(' ')}`)
+  info: (level: string, ...message: unknown[]) => c.level <= LogLevel.INFO && console.log(chalk`{blue [INFO] [${level}]} ${message.join(' ')}`),
+  warn: (level: string, ...message: unknown[]) => c.level <= LogLevel.WARN && console.log(chalk`{yellow [WARN] [${level}]} ${message.join(' ')}`),
+  error: (level: string, ...message: unknown[]) => c.level <= LogLevel.ERROR && console.log(chalk`{red [ERROR] [${level}]} ${message.join(' ')}`),
+  debug: (level: string, ...message: unknown[]) => c.level <= LogLevel.DEBUG && console.log(chalk`{magenta [DEBUG] [${level}]} ${message.join(' ')}`)
 }
 
 const config: {
@@ -37,9 +37,8 @@ const connections: Map<string, Socket> = new Map();
 const shredded_packets: Map<string, Map<number, Buffer>> = new Map();
 
 function appendHeader(data: Buffer, id: ReturnType<typeof randomUUID>, port: number, packet_no?: number, total?: number): Buffer {
-  const string_format = data.toString('binary');
-  const sha1 = createHash('sha1').update(string_format).digest('hex');
-  const sha512 = createHash('sha512').update(string_format).digest('hex');
+  const sha1 = createHash('sha1').update(data).digest('hex');
+  const sha512 = createHash('sha512').update(data).digest('hex');
   const header = Buffer.from(`${id} ${port} ${sha1} ${sha512} ${typeof total !== "undefined" ? ` ${packet_no} ${total}` : ""}${config.separator}`);
   return Buffer.concat([header, data]);
 }
@@ -108,7 +107,7 @@ redirector.on('connection', main_socket => {
       }
     }
     else {
-      const [header, ...invalid] = data.toString('binary').split(config.separator, 1);
+      const [header, ...invalid] = data.toString('utf8').split(config.separator, 1);
       invalid.length && c.warn("MAIN", "Received invalid packet")
       if (typeof header === "undefined" || header === "") {
         c.error("MAIN", "Invalid packet, ignoring")
@@ -127,9 +126,8 @@ redirector.on('connection', main_socket => {
       }
       const body = data.subarray(header.length + config.separator.length);
       const port = socket.localPort;
-      const body_str = body.toString('binary')
-      const sha1 = createHash('sha1').update(body_str).digest('hex');
-      const sha512 = createHash('sha512').update(body_str).digest('hex');
+      const sha1 = createHash('sha1').update(body).digest('hex');
+      const sha512 = createHash('sha512').update(body).digest('hex');
       c.debug(`SOCKET_${port}`, "Body length:", body.length)
       c.debug(`SOCKET_${port}`, "Expected:", sha1_dig)
       c.debug(`SOCKET_${port}`, "Got:     ", sha1)
@@ -159,6 +157,7 @@ redirector.on('connection', main_socket => {
           const s_packet = shredded_packets.get(id)!;
           s_packet.set(parseInt(packet_no), body);
           if (s_packet.size === parseInt(total!)) {
+            c.warn(`SOCKET_${port}/${sha1_dig}`, "Got all shredded packets, reassembling")
             const packets = []
             for (let i = 0; i < parseInt(total!); i++) {
               packets.push(s_packet.get(i)!)
