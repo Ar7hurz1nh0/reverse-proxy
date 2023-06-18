@@ -185,10 +185,10 @@ redirector.on('connection', main_socket => {
       hex_raw = hex_raw.replace(header_hex, '');
       hex_raw = hex_raw.replace(Buffer.from(config.separator).toString('hex'), '');
       hex_raw = hex_raw.replace(body.toString('hex'), '');
-      c.debug(`SOCKET_${port}`, "Data:", chalk`{bgGray {red ${action_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}} {green ${id_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}} {yellow 20} {blue ${sha1_dig_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()} {yellow 20} {magenta ${sha512_dig_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}}} {yellow ${Buffer.from(config.auth).toString('hex')}}} ${body.toString('hex').split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}`);
+      c.debug(`SOCKET_${port}`, "Data:", chalk`{bgGray {red ${action_hex?.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()}} {yellow 20} {green ${id_hex?.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()}} {yellow 20} {blue ${sha1_dig_hex?.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()} {yellow 20} {magenta ${sha512_dig_hex?.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()}}} {yellow ${Buffer.from(config.separator).toString('hex').split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()}}} ${body.toString('hex').split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()}`);
       if (hex_raw !== '') {
         c.warn(`SOCKET_${port}`, "There is some data left in the buffer")
-        c.warn(`SOCKET_${port}`, "Data:", hex_raw.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim())
+        c.warn(`SOCKET_${port}`, "Data:", hex_raw.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim())
       }
       const sha1 = createHash('sha1').update(body).digest('hex');
       const sha512 = createHash('sha512').update(body).digest('hex');
