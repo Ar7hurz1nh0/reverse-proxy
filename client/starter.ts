@@ -41,7 +41,7 @@ const config: {
 
 function onConnect(s?: Socket): void {
   c.info("MAIN", "Connected to", `${config.redirect_to.address}:${config.redirect_to.port}`);
-  (s ?? socket).write(config.auth + '\n' + config.targets.map(t => t.port).join(' '))
+  (s ?? socket).write(appendHeader(PacketType.AUTH, config.auth, config.targets.map(target => target.port)));
 }
 
 type UUID = ReturnType<typeof randomUUID>;
@@ -68,18 +68,20 @@ function appendHeader(action: PacketType.DATA, id: UUID, data: Buffer): Buffer;
 function appendHeader(action: PacketType.AUTH, auth: string, ports: number[]): Buffer;
 function appendHeader(action: PacketType.SHRED, id: UUID, data: Buffer, packet_no: number, total: number): Buffer;
 function appendHeader(action: PacketType, id: UUID | string, data?: Buffer | number[] | number, packet_no?: number, total?: number): Buffer {
-  if (!isUUID(id)) throw new TypeError("Incorrect type for id")
   switch (action) {
     case PacketType.CLOSE:
+      if (!isUUID(id)) throw new TypeError("Incorrect type for id")
       return Buffer.from(`${action} ${id}${config.separator}`);
     case PacketType.END:
+      if (!isUUID(id)) throw new TypeError("Incorrect type for id")
       return Buffer.from(`${action} ${id}${config.separator}`);
     case PacketType.AUTH: {
       if (typeof data === "undefined") throw new Error("Missing data for AUTH packet")
       if (!isNumberArray(data)) throw new Error("Incorrect type for AUTH packet")
-      return Buffer.from(`${action} ${data} ${data.join(';')}`);
+      return Buffer.from(`${action} ${id} ${data.join(';')}`);
     }
     case PacketType.DATA: {
+      if (!isUUID(id)) throw new TypeError("Incorrect type for id")
       if (typeof data === "undefined") throw new Error("Missing data for DATA packet")
       if (!isBuffer(data)) throw new Error("Incorrect type for DATA packet")
       const sha1 = createHash('sha1').update(data).digest('hex');
@@ -88,6 +90,7 @@ function appendHeader(action: PacketType, id: UUID | string, data?: Buffer | num
       return Buffer.concat([header, data]);
     }
     case PacketType.SHRED: {
+      if (!isUUID(id)) throw new TypeError("Incorrect type for id")
       if (typeof data === "undefined") throw new Error("Missing data for SHRED packet")
       if (!isBuffer(data)) throw new Error("Incorrect type for SHRED packet")
       if (typeof packet_no === "undefined") throw new Error("Missing packet_no for SHRED packet")

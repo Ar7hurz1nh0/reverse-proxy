@@ -77,7 +77,7 @@ function appendHeader(action: PacketType, id: string | UUID, data?: Buffer | num
     case PacketType.AUTH: {
       if (typeof data === "undefined") throw new Error("Missing data for AUTH packet")
       if (!isNumberArray(data)) throw new TypeError("Incorrect type for AUTH packet")
-      return Buffer.from(`${action} ${data} ${data.join(';')}`);
+      return Buffer.from(`${action} ${id} ${data.join(';')}`);
     }
     case PacketType.DATA: {
       if (typeof data === "undefined") throw new Error("Missing data for DATA packet")
