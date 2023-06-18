@@ -63,23 +63,31 @@ function isUUID(data: unknown): data is UUID {
 }
 
 function appendHeader(action: PacketType.CLOSE, id: UUID): Buffer;
-function appendHeader(action: PacketType.END, id: UUID): Buffer;
 function appendHeader(action: PacketType.AUTH, auth: string, ports: number[]): Buffer;
+function appendHeader(action: PacketType.END, id: UUID, data: Buffer, port: number): Buffer;
 function appendHeader(action: PacketType.DATA, id: UUID, data: Buffer, port: number): Buffer;
 function appendHeader(action: PacketType.SHRED, id: UUID, data: Buffer, port: number, packet_no: number, total: number): Buffer;
 function appendHeader(action: PacketType, id: string | UUID, data?: Buffer | number[] | number, port?: number, packet_no?: number, total?: number): Buffer {
-  if (typeof id === "string" && !isUUID(id)) throw new TypeError("Incorrect type for id")
   switch (action) {
-    case PacketType.CLOSE:
+    case PacketType.CLOSE: {
+      if (typeof id === "string" && !isUUID(id)) throw new TypeError("Incorrect type for id")
       return Buffer.from(`${action} ${id}${config.separator}`);
-    case PacketType.END:
-      return Buffer.from(`${action} ${id}${config.separator}`);
+    }
+    case PacketType.END: {
+      if (typeof id === "string" && !isUUID(id)) throw new TypeError("Incorrect type for id")
+      if (typeof data === "undefined") throw new Error("Missing data for DATA packet")
+      if (!isBuffer(data)) throw new TypeError("Incorrect type for DATA packet")
+      const sha1 = createHash('sha1').update(data).digest('hex');
+      const sha512 = createHash('sha512').update(data).digest('hex');
+      return Buffer.from(`${action} ${id} ${port} ${sha1} ${sha512}${config.separator}`);
+    }
     case PacketType.AUTH: {
       if (typeof data === "undefined") throw new Error("Missing data for AUTH packet")
       if (!isNumberArray(data)) throw new TypeError("Incorrect type for AUTH packet")
       return Buffer.from(`${action} ${id} ${data.join(';')}`);
     }
     case PacketType.DATA: {
+      if (typeof id === "string" && !isUUID(id)) throw new TypeError("Incorrect type for id")
       if (typeof data === "undefined") throw new Error("Missing data for DATA packet")
       if (!isBuffer(data)) throw new TypeError("Incorrect type for DATA packet")
       const sha1 = createHash('sha1').update(data).digest('hex');
@@ -88,6 +96,7 @@ function appendHeader(action: PacketType, id: string | UUID, data?: Buffer | num
       return Buffer.concat([header, data]);
     }
     case PacketType.SHRED: {
+      if (typeof id === "string" && !isUUID(id)) throw new TypeError("Incorrect type for id")
       if (typeof data === "undefined") throw new Error("Missing data for SHRED packet")
       if (!isBuffer(data)) throw new TypeError("Incorrect type for SHRED packet")
       if (typeof packet_no === "undefined") throw new Error("Missing packet_no for SHRED packet")
@@ -105,7 +114,7 @@ redirector.on('connection', main_socket => {
   main_socket.on('data', data => {
     if (ports === null) {
       const [action, auth, ports_str] = data.toString('utf8').split(' ');
-      if (typeof action === "undefined" || action === "" || !isPacketType(action) || action === PacketType.AUTH) {
+      if (typeof action === "undefined" || action === "" || !isPacketType(action) || action !== PacketType.AUTH) {
         c.error("MAIN", "Invalid auth packet, closing connection")
         c.debug("MAIN", "Received", data.toString('utf8'))
         c.debug("MAIN", "Action debug:", action, isPacketType(action), action === PacketType.AUTH)
