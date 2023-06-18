@@ -85,6 +85,7 @@ function appendHeader(action: PacketType, id: string | UUID, data?: Buffer | num
 
 redirector.on('connection', main_socket => {
   c.info("MAIN", "Received connection from", main_socket.remoteAddress)
+  main_socket = main_socket.setNoDelay(true);
   main_socket.on('data', data => {
     if (ports === null) {
       const [action, auth, ports_str] = data.toString('utf8').split(' ');
@@ -114,6 +115,7 @@ redirector.on('connection', main_socket => {
         servers.set(port, server);
 
         server.on('connection', socket => {
+          socket.setNoDelay(true);
           c.info(`SOCKET_${port}`, "Received connection from", socket.remoteAddress)
           let id = randomUUID();
           while (connections.has(id)) id = randomUUID();

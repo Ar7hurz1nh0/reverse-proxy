@@ -94,7 +94,7 @@ function appendHeader(action: PacketType, id: UUID | string, data?: Buffer | num
 const connections: Map<UUID, Socket> = new Map();
 
 c.info("MAIN", "Attempting to connect to", `${config.redirect_to.address}:${config.redirect_to.port}`)
-const socket = connect(config.redirect_to.port, config.redirect_to.address, onConnect)
+const socket = connect(config.redirect_to.port, config.redirect_to.address, onConnect).setNoDelay(true);
 
 socket.on('error', data => {
   c.error("MAIN", "Error while connecting to target:", data.message ?? data)
