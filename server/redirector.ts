@@ -5,17 +5,25 @@ import chalk from 'chalk';
 
 chalk.level = 2;
 
-const enum LogLevel {
+enum LogLevel {
   DEBUG = 0,
   INFO = 1,
   WARN = 2,
   ERROR = 3,
 }
 
+enum PacketType {
+  DATA = "DATA",
+  END = "END",
+  CLOSE = "CLOSE",
+  AUTH = "AUTH",
+  SHRED = "SHRED",
+}
+
 const c = {
   level: LogLevel.INFO,
-  info: (level: string, ...message: unknown[]) => c.level <= LogLevel.INFO && console.log(chalk`{blue [INFO] [${level}]} ${message.join(' ')}`),
-  warn: (level: string, ...message: unknown[]) => c.level <= LogLevel.WARN && console.log(chalk`{yellow [WARN] [${level}]} ${message.join(' ')}`),
+  info: (level: string, ...message: unknown[]) => c.level <= LogLevel.INFO && console.log(chalk`{blue [INFO]  [${level}]} ${message.join(' ')}`),
+  warn: (level: string, ...message: unknown[]) => c.level <= LogLevel.WARN && console.log(chalk`{yellow [WARN]  [${level}]} ${message.join(' ')}`),
   error: (level: string, ...message: unknown[]) => c.level <= LogLevel.ERROR && console.log(chalk`{red [ERROR] [${level}]} ${message.join(' ')}`),
   debug: (level: string, ...message: unknown[]) => c.level <= LogLevel.DEBUG && console.log(chalk`{magenta [DEBUG] [${level}]} ${message.join(' ')}`)
 }
@@ -32,33 +40,87 @@ const redirector = createServer();
 let ports: null | number[] = null;
 
 const servers = new Map<number, ReturnType<typeof createServer>>();
-const connections: Map<string, Socket> = new Map();
+const connections: Map<UUID, Socket> = new Map();
 
-const shredded_packets: Map<string, Map<number, Buffer>> = new Map();
+const shredded_packets: Map<UUID, Map<number, Buffer>> = new Map();
 
-function appendHeader(data: Buffer, id: ReturnType<typeof randomUUID>, port: number, packet_no?: number, total?: number): Buffer {
-  const sha1 = createHash('sha1').update(data).digest('hex');
-  const sha512 = createHash('sha512').update(data).digest('hex');
-  const header = Buffer.from(`${id} ${port} ${sha1} ${sha512} ${typeof total !== "undefined" ? ` ${packet_no} ${total}` : ""}${config.separator}`);
-  return Buffer.concat([header, data]);
+function isPacketType(data: unknown): data is PacketType {
+  return typeof data === "string" && Object.values(PacketType).includes(data as PacketType);
+}
+
+function isBuffer(data: unknown): data is Buffer {
+  return Buffer.isBuffer(data);
+}
+
+function isNumberArray(data: unknown): data is number[] {
+  return Array.isArray(data) && typeof data[0] === "number";
+}
+
+type UUID = ReturnType<typeof randomUUID>;
+
+function isUUID(data: unknown): data is UUID {
+  return typeof data === "string" && data.length === 36 && data.split('-', 6).length === 5;
+}
+
+function appendHeader(action: PacketType.CLOSE, id: UUID): Buffer;
+function appendHeader(action: PacketType.END, id: UUID): Buffer;
+function appendHeader(action: PacketType.AUTH, auth: string, ports: number[]): Buffer;
+function appendHeader(action: PacketType.DATA, id: UUID, data: Buffer, port: number): Buffer;
+function appendHeader(action: PacketType.SHRED, id: UUID, data: Buffer, port: number, packet_no: number, total: number): Buffer;
+function appendHeader(action: PacketType, id: string | UUID, data?: Buffer | number[] | number, port?: number, packet_no?: number, total?: number): Buffer {
+  if (typeof id === "string" && !isUUID(id)) throw new TypeError("Incorrect type for id")
+  switch (action) {
+    case PacketType.CLOSE:
+      return Buffer.from(`${action} ${id}${config.separator}`);
+    case PacketType.END:
+      return Buffer.from(`${action} ${id}${config.separator}`);
+    case PacketType.AUTH: {
+      if (typeof data === "undefined") throw new Error("Missing data for AUTH packet")
+      if (!isNumberArray(data)) throw new TypeError("Incorrect type for AUTH packet")
+      return Buffer.from(`${action} ${data} ${data.join(';')}`);
+    }
+    case PacketType.DATA: {
+      if (typeof data === "undefined") throw new Error("Missing data for DATA packet")
+      if (!isBuffer(data)) throw new TypeError("Incorrect type for DATA packet")
+      const sha1 = createHash('sha1').update(data).digest('hex');
+      const sha512 = createHash('sha512').update(data).digest('hex');
+      const header = Buffer.from(`${action} ${id} ${port} ${sha1} ${sha512}${config.separator}`);
+      return Buffer.concat([header, data]);
+    }
+    case PacketType.SHRED: {
+      if (typeof data === "undefined") throw new Error("Missing data for SHRED packet")
+      if (!isBuffer(data)) throw new TypeError("Incorrect type for SHRED packet")
+      if (typeof packet_no === "undefined") throw new Error("Missing packet_no for SHRED packet")
+      if (typeof total === "undefined") throw new Error("Missing total for SHRED packet")
+      const sha1 = createHash('sha1').update(data).digest('hex');
+      const sha512 = createHash('sha512').update(data).digest('hex');
+      const header = Buffer.from(`${action} ${id} ${port} ${sha1} ${sha512} ${packet_no} ${total}${config.separator}`);
+      return Buffer.concat([header, data]);
+    }
+  }
 }
 
 redirector.on('connection', main_socket => {
   c.info("MAIN", "Received connection from", main_socket.remoteAddress)
   main_socket.on('data', data => {
     if (ports === null) {
-      const packet = data.toString('utf8').split('\n');
-      if (typeof packet[0] === "undefined" || packet[0] === "" || packet[0] !== config.auth) {
+      const [action, auth, ports_str] = data.toString('utf8').split(' ');
+      if (typeof action === "undefined" || action === "" || !isPacketType(action) || action === PacketType.AUTH) {
+        c.error("MAIN", "Invalid auth packet, closing connection")
+        main_socket.end();
+        return;
+      }
+      if (typeof auth === "undefined" || auth === "" || auth !== config.auth) {
         c.error("MAIN", "Invalid auth packet, closing connection")
         main_socket.end();
         return;
       } else { c.info("MAIN", "Received valid auth packet, parsing port list") }
-      if (typeof packet[1] === "undefined" || packet[1] === "") {
+      if (typeof ports_str === "undefined" || ports_str === "") {
         c.error("MAIN", "Invalid port list, closing connection")
         main_socket.end();
         return;
       }
-      else ports = packet[1].split(' ').map(port => parseInt(port));
+      else ports = ports_str.split(';').map(port => parseInt(port));
 
       for (const port of ports) {
         const server = createServer();
@@ -83,15 +145,16 @@ redirector.on('connection', main_socket => {
               const total = packets.length;
               packets.forEach((packet, i) => {
                 c.debug(`CONN_${port}/${id}`, `Sending packet ${i + 1}/${total}`)
-                const new_body = appendHeader(packet, id, i, total);
+                const new_body = appendHeader(PacketType.SHRED, id, packet, port, i, total);
                 socket.write(new_body)
               })
             }
-            else main_socket.write(appendHeader(data, id, port))
+            else main_socket.write(appendHeader(PacketType.DATA, id, data, port))
           });
 
           socket.on('close', () => {
             c.warn(`SOCKET_${port}`, "Closing connection", id)
+            main_socket.write(appendHeader(PacketType.CLOSE, id))
             connections.delete(id);
           })
 
@@ -114,14 +177,15 @@ redirector.on('connection', main_socket => {
         return;
       }
       c.debug("MAIN", "Header size:", header.length)
-      const [id, sha1_dig, sha512_dig, packet_no, total] = header.split(' ', 5);
-      if (typeof id === "undefined" || id === "") {
+      const [action, id, sha1_dig, sha512_dig, packet_no, total] = header.split(' ', 5);
+      if (!isUUID(id)) {
         c.error("MAIN", "Invalid id, ignoring")
         return;
       }
       const socket = connections.get(id);
       if (typeof socket === "undefined") {
         c.warn("MAIN", "Connection was already closed, ignoring packet")
+        main_socket.write(appendHeader(PacketType.CLOSE, id))
         return;
       }
       const body = data.subarray(header.length + config.separator.length);
@@ -147,17 +211,21 @@ redirector.on('connection', main_socket => {
         c.error(`SOCKET_${port}`, "Invalid packet, closing connection")
         return;
       }
+      if (!isPacketType(action)) {
+        c.error(`SOCKET_${port}/ID_${id}`, "Invalid action, ignoring")
+        return;
+      }
       if (typeof packet_no === "undefined" || packet_no === "") {
         socket.write(body);
         c.info(`SOCKET_${port}`, main_socket.remoteAddress, '->', id)
       }
       else {
-        c.info(`SOCKET_${port}/${sha1_dig}`, "Got shredded packet", `[${packet_no}/${total}]`)
+        c.info(`SOCKET_${port}/ID_${id}`, "Got shredded packet", `[${packet_no}/${total}]`)
         if (shredded_packets.has(id)) {
           const s_packet = shredded_packets.get(id)!;
           s_packet.set(parseInt(packet_no), body);
           if (s_packet.size === parseInt(total!)) {
-            c.warn(`SOCKET_${port}/${sha1_dig}`, "Got all shredded packets, reassembling")
+            c.warn(`SOCKET_${port}/ID_${id}`, "Got all shredded packets, reassembling")
             const packets = []
             for (let i = 0; i < parseInt(total!); i++) {
               packets.push(s_packet.get(i)!)
