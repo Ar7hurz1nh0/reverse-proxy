@@ -185,7 +185,7 @@ redirector.on('connection', main_socket => {
       hex_raw = hex_raw.replace(header_hex, '');
       hex_raw = hex_raw.replace(Buffer.from(config.separator).toString('hex'), '');
       hex_raw = hex_raw.replace(body.toString('hex'), '');
-      c.debug(`SOCKET_${port}`, "Data:", chalk`{bgWhite {red ${action_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}}{green ${id_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}}{blue ${sha1_dig_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}{magenta ${sha512_dig_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}}}}${body.toString('hex').split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}`);
+      c.debug(`SOCKET_${port}`, "Data:", chalk`{bgGray {red ${action_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}} {green ${id_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}} {blue ${sha1_dig_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()} {magenta ${sha512_dig_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}}}} ${body.toString('hex').split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}`);
       if (hex_raw !== '') {
         c.warn(`SOCKET_${port}`, "There is some data left in the buffer")
         c.warn(`SOCKET_${port}`, "Data:", hex_raw.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim())
