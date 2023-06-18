@@ -154,6 +154,8 @@ redirector.on('connection', main_socket => {
       }
     }
     else {
+      c.debug("MAIN", "Received data from client");
+      c.debug("MAIN", "Data:", data.toString('utf8'));
       const [header, ...invalid] = data.toString('utf8').split(config.separator, 1);
       invalid.length && c.warn("MAIN", "Received invalid packet")
       if (typeof header === "undefined" || header === "") {
