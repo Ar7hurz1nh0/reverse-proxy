@@ -12,10 +12,8 @@ enum LogLevel {
 
 enum PacketType {
   DATA = "DATA",
-  END = "END",
   CLOSE = "CLOSE",
   AUTH = "AUTH",
-  SHRED = "SHRED",
 }
 
 const c = {
@@ -41,7 +39,12 @@ const config: {
 
 function onConnect(s?: Socket): void {
   c.info("MAIN", "Connected to", `${config.redirect_to.address}:${config.redirect_to.port}`);
-  (s ?? socket).write(appendHeader(PacketType.AUTH, config.auth, config.targets.map(target => target.port)));
+  const flushed = (s ?? socket).write(appendHeader(PacketType.AUTH, config.auth, config.targets.map(target => target.port)), err => {
+    if (err) c.error("MAIN", "Error while sending AUTH packet:", err);
+    else c.debug("MAIN", "Sent AUTH packet");
+  });
+  if (!flushed) c.warn("MAIN", "Buffer full, did NOT flushed full AUTH packet");
+  else c.debug("MAIN", "Flushed full buffer");
 }
 
 type UUID = ReturnType<typeof randomUUID>;
@@ -63,23 +66,13 @@ function isNumberArray(data: unknown): data is number[] {
 }
 
 function appendHeader(action: PacketType.CLOSE, id: UUID): Buffer;
-function appendHeader(action: PacketType.END, id: UUID, data: Buffer): Buffer;
 function appendHeader(action: PacketType.DATA, id: UUID, data: Buffer): Buffer;
 function appendHeader(action: PacketType.AUTH, auth: string, ports: number[]): Buffer;
-function appendHeader(action: PacketType.SHRED, id: UUID, data: Buffer, packet_no: number, total: number): Buffer;
-function appendHeader(action: PacketType, id: UUID | string, data?: Buffer | number[] | number, packet_no?: number, total?: number): Buffer {
+function appendHeader(action: PacketType, id: UUID | string, data?: Buffer | number[] | number): Buffer {
   switch (action) {
     case PacketType.CLOSE: {
       if (!isUUID(id)) throw new TypeError("Incorrect type for id")
       return Buffer.from(`${action} ${id}${config.separator}`);
-    }
-    case PacketType.END: {
-      if (typeof id === "string" && !isUUID(id)) throw new TypeError("Incorrect type for id")
-      if (typeof data === "undefined") throw new Error("Missing data for DATA packet")
-      if (!isBuffer(data)) throw new TypeError("Incorrect type for DATA packet")
-      const sha1 = createHash('sha1').update(data).digest('hex');
-      const sha512 = createHash('sha512').update(data).digest('hex');
-      return Buffer.from(`${action} ${id} ${sha1} ${sha512}${config.separator}`);
     }
     case PacketType.AUTH: {
       if (typeof data === "undefined") throw new Error("Missing data for AUTH packet")
@@ -95,23 +88,10 @@ function appendHeader(action: PacketType, id: UUID | string, data?: Buffer | num
       const header = Buffer.from(`${action} ${id} ${sha1} ${sha512}${config.separator}`);
       return Buffer.concat([header, data]);
     }
-    case PacketType.SHRED: {
-      if (!isUUID(id)) throw new TypeError("Incorrect type for id")
-      if (typeof data === "undefined") throw new Error("Missing data for SHRED packet")
-      if (!isBuffer(data)) throw new Error("Incorrect type for SHRED packet")
-      if (typeof packet_no === "undefined") throw new Error("Missing packet_no for SHRED packet")
-      if (typeof total === "undefined") throw new Error("Missing total for SHRED packet")
-      const sha1 = createHash('sha1').update(data).digest('hex');
-      const sha512 = createHash('sha512').update(data).digest('hex');
-      const header = Buffer.from(`${action} ${id} ${sha1} ${sha512} ${packet_no} ${total}${config.separator}`);
-      return Buffer.concat([header, data]);
-    }
   }
 }
 
-const MAX_PACKET_SIZE = 384;
 const connections: Map<UUID, Socket> = new Map();
-const shredded_packets: Map<UUID, Map<number, Buffer>> = new Map();
 
 c.info("MAIN", "Attempting to connect to", `${config.redirect_to.address}:${config.redirect_to.port}`)
 const socket = connect(config.redirect_to.port, config.redirect_to.address, onConnect)
@@ -136,7 +116,7 @@ socket.on('data', data => {
     c.warn("MAIN", "Invalid header, ignoring")
     return;
   }
-  const [action, id, port_str, sha1_dig, sha512_dig, packet_no, total] = header.split(' ', 7);
+  const [action, id, port_str, sha1_dig, sha512_dig] = header.split(' ', 5);
   if (!isPacketType(action)) {
     c.error(`CONN_${port_str}/ID_${id}`, "Invalid action, ignoring")
     return;
@@ -186,20 +166,22 @@ socket.on('data', data => {
     conn_socket.on('data', data => {
       c.debug(`CONN_${port}/ID_${id}`, "Received data from target")
       const sha1 = createHash('sha1').update(data).digest('hex');
-      const length = data.byteLength
-      c.debug(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Body length:", length)
-      if (length > MAX_PACKET_SIZE) {
-        c.warn(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Packet too large, splitting");
-        const total = Math.ceil(length / MAX_PACKET_SIZE);
-        for (let i = 0; i < length; i += MAX_PACKET_SIZE) {
-          const new_body = appendHeader(PacketType.SHRED, id, Buffer.from(data, i, MAX_PACKET_SIZE), i + 1, total);
-          c.debug(`CONN_${port}/ID_${id}/SHA1_${sha1}`, `Sending packet ${i + 1}/${total} (${new_body.length} bytes)`)
-          socket.write(new_body)
-        }
-        socket.write(Buffer.from([]))
-      }
-      else socket.write(appendHeader(PacketType.DATA, id, data))
+      c.debug(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Body length:", data.byteLength)
       c.debug(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Sending data to client")
+      const flushed = socket.write(appendHeader(PacketType.DATA, id, data), err => {
+        if (err)
+          c.error(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Error while sending data to client:", err)
+        else c.debug(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Sent data to client")
+      })
+      if (!flushed) {
+        c.warn(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Client buffer full, pausing target")
+        conn_socket.pause();
+        socket.once('drain', () => {
+          c.warn(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Client buffer drained, resuming target")
+          conn_socket.resume();
+        })
+      }
+      else c.debug(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Successfully flushed buffer data to client")
     })
 
     conn_socket.on('close', () => {
@@ -229,25 +211,19 @@ socket.on('data', data => {
       c.debug(`CONN_${port}/ID_${id}`, "Target ready")
     })
   }
-  if (typeof packet_no === "undefined" || packet_no === "") {
-    const success = connections.get(id)?.write(body)
-    if (success) c.debug(`CONN_${port}/ID_${id}`, "Successfully flushed buffer to target")
-    else c.error(`CONN_${port}/ID_${id}`, "Failed to flush buffer to target:", success)
-  }
+  const success = connections.get(id)?.write(body, err => {
+    if (err)
+      c.error(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Error while sending data to client:", err)
+    else c.debug(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Sent data to client")
+  })
+  if (success) c.debug(`CONN_${port}/ID_${id}`, "Successfully flushed buffer to target")
   else {
-    c.info(`SOCKET_${port}/${sha1_dig}`, "Got shredded packet", `[${packet_no}/${total}]`)
-    if (shredded_packets.has(id)) {
-      const s_packet = shredded_packets.get(id)!;
-      s_packet.set(parseInt(packet_no), body);
-      if (s_packet.size === parseInt(total!)) {
-        c.warn(`SOCKET_${port}/${sha1_dig}`, "Got all shredded packets, reassembling")
-        const packets = []
-        for (let i = 0; i < parseInt(total!); i++) {
-          packets.push(s_packet.get(i)!)
-        }
-        connections.get(id)?.write(Buffer.concat(packets));
-      }
-    } else shredded_packets.set(id, new Map([[parseInt(packet_no), body]]));
+    c.error(`CONN_${port}/ID_${id}`, "Failed to flush buffer to target, pausing client")
+    socket.pause();
+    socket.once('drain', () => {
+      c.error(`CONN_${port}/ID_${id}`, "Client buffer drained, resuming client")
+      socket.resume();
+    })
   }
 })
 
