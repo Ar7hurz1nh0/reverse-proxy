@@ -205,7 +205,13 @@ redirector.on('connection', main_socket => {
         })
         return;
       }
-      const body = data.subarray(header.length + config.separator.length);
+      if (!hex_raw.endsWith(AUTH_HEX)) {
+        c.warn("MAIN", "Just received a split packet, waiting for the rest")
+        isOnSplitupPhase = [true, socket];
+        socket.write(data.subarray(header.length + config.separator.length));
+        return;
+      }
+      const body = data.subarray(header.length + config.separator.length, data.length - AUTH_BUFFER.length);
       const port = socket.localPort;
       hex_raw = hex_raw.replace(header_hex, '');
       hex_raw = hex_raw.replace(Buffer.from(config.separator).toString('hex'), '');
@@ -214,12 +220,6 @@ redirector.on('connection', main_socket => {
       if (hex_raw !== '') {
         c.warn(`SOCKET_${port}`, "There is some data left in the buffer")
         c.warn(`SOCKET_${port}`, "Data:", hex_raw.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim())
-      }
-      if (!body.toString('hex').endsWith(Buffer.from(config.auth).toString('hex'))) {
-        c.warn(`SOCKET_${port}`, "Just received a split packet, waiting for the rest")
-        isOnSplitupPhase = [true, socket];
-        socket.write(body);
-        return;
       }
       const sha1 = createHash('sha1').update(body).digest('hex');
       const sha512 = createHash('sha512').update(body).digest('hex');

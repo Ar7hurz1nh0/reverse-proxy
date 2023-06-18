@@ -37,9 +37,13 @@ const config: {
   };
 } = JSON.parse(readFileSync('config.json', 'utf8'));
 
+const AUTH_BUFFER = Buffer.from(config.auth);
+const AUTH_HEX = AUTH_BUFFER.toString('hex');
+// const SEPARATOR_HEX = Buffer.from(config.separator).toString('hex');
+
 function onConnect(s?: Socket): void {
   c.info("MAIN", "Connected to", `${config.redirect_to.address}:${config.redirect_to.port}`);
-  const flushed = (s ?? socket).write(appendHeader(PacketType.AUTH, config.auth, config.targets.map(target => target.port)), err => {
+  const flushed = (s ?? socket).write(buildPacket(PacketType.AUTH, config.auth, config.targets.map(target => target.port)), err => {
     if (err) c.error("MAIN", "Error while sending AUTH packet:", err);
     else c.debug("MAIN", "Sent AUTH packet");
   });
@@ -65,10 +69,10 @@ function isNumberArray(data: unknown): data is number[] {
   return Array.isArray(data) && typeof data[0] === "number";
 }
 
-function appendHeader(action: PacketType.CLOSE, id: UUID): Buffer;
-function appendHeader(action: PacketType.DATA, id: UUID, data: Buffer): Buffer;
-function appendHeader(action: PacketType.AUTH, auth: string, ports: number[]): Buffer;
-function appendHeader(action: PacketType, id: UUID | string, data?: Buffer | number[] | number): Buffer {
+function buildPacket(action: PacketType.CLOSE, id: UUID): Buffer;
+function buildPacket(action: PacketType.DATA, id: UUID, data: Buffer): Buffer;
+function buildPacket(action: PacketType.AUTH, auth: string, ports: number[]): Buffer;
+function buildPacket(action: PacketType, id: UUID | string, data?: Buffer | number[] | number): Buffer {
   switch (action) {
     case PacketType.CLOSE: {
       if (!isUUID(id)) throw new TypeError("Incorrect type for id")
@@ -86,7 +90,7 @@ function appendHeader(action: PacketType, id: UUID | string, data?: Buffer | num
       const sha1 = createHash('sha1').update(data).digest('hex');
       const sha512 = createHash('sha512').update(data).digest('hex');
       const header = Buffer.from(`${action} ${id} ${sha1} ${sha512}${config.separator}`);
-      return Buffer.concat([header, data]);
+      return Buffer.concat([header, data, AUTH_BUFFER]);
     }
   }
 }
@@ -135,7 +139,11 @@ socket.on('data', data => {
     c.error(`CONN_${port_str}/ID_${id}`, "Invalid port, ignoring")
     return
   }
-  const body = data.subarray(header.length + config.separator.length);
+  if (!data.toString('hex').endsWith(AUTH_HEX)) {
+    c.warn(`CONN_${port_str}/ID_${id}`, "Just received a partial packet, waiting for the rest")
+    return;
+  }
+  const body = data.subarray(header.length + config.separator.length, data.length - AUTH_BUFFER.length);
   const sha1 = createHash('sha1').update(body).digest('hex');
   const sha512 = createHash('sha512').update(body).digest('hex');
   const body_len = body.byteLength;
@@ -168,7 +176,7 @@ socket.on('data', data => {
       const sha1 = createHash('sha1').update(data).digest('hex');
       c.debug(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Body length:", data.byteLength)
       c.debug(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Sending data to client")
-      const flushed = socket.write(appendHeader(PacketType.DATA, id, data), err => {
+      const flushed = socket.write(buildPacket(PacketType.DATA, id, data), err => {
         if (err)
           c.error(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Error while sending data to client:", err)
         else c.debug(`CONN_${port}/ID_${id}/SHA1_${sha1}`, "Sent data to client")
