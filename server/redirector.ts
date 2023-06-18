@@ -154,9 +154,10 @@ redirector.on('connection', main_socket => {
       }
     }
     else {
+      let hex_raw = data.toString('hex')
       c.debug("MAIN", "Received data from client");
-      c.debug("MAIN", "Data:", data.toString('hex').split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join(''));
       const [header, ...invalid] = data.toString('utf8').split(config.separator, 1);
+      const header_hex = data.toString('hex').split(Buffer.from(config.separator).toString('hex'), 1)[0]!;
       invalid.length && c.warn("MAIN", "Received invalid packet")
       if (typeof header === "undefined" || header === "") {
         c.error("MAIN", "Invalid packet, ignoring")
@@ -164,6 +165,7 @@ redirector.on('connection', main_socket => {
       }
       c.debug("MAIN", "Header:", header)
       const [action, id, sha1_dig, sha512_dig] = header.split(' ', 4);
+      const [action_hex, id_hex, sha1_dig_hex, sha512_dig_hex] = header_hex.split('20', 4);
       if (!isUUID(id)) {
         c.error("MAIN", "Invalid id, ignoring")
         return;
@@ -180,6 +182,14 @@ redirector.on('connection', main_socket => {
       }
       const body = data.subarray(header.length + config.separator.length);
       const port = socket.localPort;
+      hex_raw = hex_raw.replace(header_hex, '');
+      hex_raw = hex_raw.replace(Buffer.from(config.separator).toString('hex'), '');
+      hex_raw = hex_raw.replace(body.toString('hex'), '');
+      c.debug(`SOCKET_${port}`, "Data:", chalk`{bgWhite {red ${action_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}}{green ${id_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}}{blue ${sha1_dig_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}{magenta ${sha512_dig_hex?.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}}}}${body.toString('hex').split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim()}`);
+      if (hex_raw !== '') {
+        c.warn(`SOCKET_${port}`, "There is some data left in the buffer")
+        c.warn(`SOCKET_${port}`, "Data:", hex_raw.split('').map((char, i) => i % 2 !== 0 ? char + ' ' : char).join('').trim())
+      }
       const sha1 = createHash('sha1').update(body).digest('hex');
       const sha512 = createHash('sha512').update(body).digest('hex');
       c.error(`SOCKET_${port}/${sha1_dig}`, "Buffer sizes:", data.length, data.length - header.length - config.separator.length, body.length)
