@@ -107,11 +107,15 @@ redirector.on('connection', main_socket => {
       const [action, auth, ports_str] = data.toString('utf8').split(' ');
       if (typeof action === "undefined" || action === "" || !isPacketType(action) || action === PacketType.AUTH) {
         c.error("MAIN", "Invalid auth packet, closing connection")
+        c.debug("MAIN", "Received", data.toString('utf8'))
+        c.debug("MAIN", "Action debug:", action, isPacketType(action), action === PacketType.AUTH)
         main_socket.end();
         return;
       }
       if (typeof auth === "undefined" || auth === "" || auth !== config.auth) {
         c.error("MAIN", "Invalid auth packet, closing connection")
+        c.debug("MAIN", "Received", auth)
+        c.debug("MAIN", "Expected:", config.auth)
         main_socket.end();
         return;
       } else { c.info("MAIN", "Received valid auth packet, parsing port list") }
