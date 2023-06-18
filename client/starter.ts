@@ -159,11 +159,6 @@ socket.on('data', data => {
   const sha1 = createHash('sha1').update(body).digest('hex');
   const sha512 = createHash('sha512').update(body).digest('hex');
   const body_len = body.byteLength;
-  c.debug(`CONN_${port_str}/ID_${id}`, "Body length:", body_len)
-  c.debug(`CONN_${port_str}/ID_${id}`, "Expected:", sha1_dig)
-  c.debug(`CONN_${port_str}/ID_${id}`, "Got:     ", sha1)
-  c.debug(`CONN_${port_str}/ID_${id}`, "Expected:", sha512_dig)
-  c.debug(`CONN_${port_str}/ID_${id}`, "Got:     ", sha512)
   if (sha1 !== sha1_dig || sha512 !== sha512_dig) {
     c.error(`CONN_${port_str}/ID_${id}`, "Invalid checksum, ignoring")
     c.error(`CONN_${port_str}/ID_${id}`, "Body length:", body_len)
@@ -172,7 +167,14 @@ socket.on('data', data => {
     c.error(`CONN_${port_str}/ID_${id}`, "Expected:", sha512_dig)
     c.error(`CONN_${port_str}/ID_${id}`, "Got:     ", sha512)
     return;
-  } else c.debug(`CONN_${port_str}/ID_${id}`, "Checksums match")
+  } else {
+    c.debug(`CONN_${port_str}/ID_${id}`, "Checksums match")
+    c.debug(`CONN_${port_str}/ID_${id}`, "Body length:", body_len)
+    c.debug(`CONN_${port_str}/ID_${id}`, "Expected:", sha1_dig)
+    c.debug(`CONN_${port_str}/ID_${id}`, "Got:     ", sha1)
+    c.debug(`CONN_${port_str}/ID_${id}`, "Expected:", sha512_dig)
+    c.debug(`CONN_${port_str}/ID_${id}`, "Got:     ", sha512)
+  }
   const port = parseInt(port_str);
   c.debug(`CONN_${port}/ID_${id}`, "Received data from connection")
   if (!connections.has(id)) {

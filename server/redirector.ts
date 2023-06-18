@@ -189,7 +189,7 @@ redirector.on('connection', main_socket => {
         c.error("MAIN", "Invalid packet, ignoring")
         return;
       }
-      c.debug("MAIN", "Header size:", header.length)
+      c.debug("MAIN", "Header:", header)
       const [action, id, sha1_dig, sha512_dig, packet_no, total] = header.split(' ', 5);
       if (!isUUID(id)) {
         c.error("MAIN", "Invalid id, ignoring")
@@ -205,11 +205,6 @@ redirector.on('connection', main_socket => {
       const port = socket.localPort;
       const sha1 = createHash('sha1').update(body).digest('hex');
       const sha512 = createHash('sha512').update(body).digest('hex');
-      c.debug(`SOCKET_${port}`, "Body length:", body.length)
-      c.debug(`SOCKET_${port}`, "Expected:", sha1_dig)
-      c.debug(`SOCKET_${port}`, "Got:     ", sha1)
-      c.debug(`SOCKET_${port}`, "Expected:", sha512_dig)
-      c.debug(`SOCKET_${port}`, "Got:     ", sha512)
       c.error(`SOCKET_${port}/${sha1_dig}`, "Buffer sizes:", data.length, data.length - header.length - config.separator.length, body.length)
       if (sha1 !== sha1_dig || sha512 !== sha512_dig) {
         c.error(`SOCKET_${port}`, `Invalid checksum, ignoring (${id}/${sha1_dig})`)
@@ -219,7 +214,14 @@ redirector.on('connection', main_socket => {
         c.error(`SOCKET_${port}`, "Expected:", sha512_dig)
         c.error(`SOCKET_${port}`, "Got:     ", sha512)
         return;
-      } else c.debug(`SOCKET_${port}`, "Checksums match")
+      } else {
+        c.debug(`SOCKET_${port}`, "Checksums match")
+        c.debug(`SOCKET_${port}`, "Body length:", body.length)
+        c.debug(`SOCKET_${port}`, "Expected:", sha1_dig)
+        c.debug(`SOCKET_${port}`, "Got:     ", sha1)
+        c.debug(`SOCKET_${port}`, "Expected:", sha512_dig)
+        c.debug(`SOCKET_${port}`, "Got:     ", sha512)
+      }
       if (typeof body === "undefined") {
         c.error(`SOCKET_${port}`, "Invalid packet, closing connection")
         return;
