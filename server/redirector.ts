@@ -32,12 +32,21 @@ const config: {
   listen: number;
 } = JSON.parse(readFileSync('config.json', 'utf8'));
 
+const AUTH_BUFFER = Buffer.from(config.auth);
+const AUTH_HEX = AUTH_BUFFER.toString('hex');
+const SEPARATOR_HEX = Buffer.from(config.separator).toString('hex');
+
 const BACKLOG = 100;
 const redirector = createServer();
 let ports: null | number[] = null;
 
 const servers = new Map<number, ReturnType<typeof createServer>>();
 const connections: Map<UUID, Socket> = new Map();
+
+function formatHex(s?: string): string {
+  if (!s) return '';
+  return s.split('').map((c, i) => i % 2 !== 0 ? c : c + ' ').join('').trim();
+}
 
 function isPacketType(data: unknown): data is PacketType {
   return typeof data === "string" && Object.values(PacketType).includes(data as PacketType);
@@ -57,10 +66,10 @@ function isUUID(data: unknown): data is UUID {
   return typeof data === "string" && data.length === 36 && data.split('-', 6).length === 5;
 }
 
-function appendHeader(action: PacketType.CLOSE, id: UUID): Buffer;
-function appendHeader(action: PacketType.AUTH, auth: string, ports: number[]): Buffer;
-function appendHeader(action: PacketType.DATA, id: UUID, data: Buffer, port: number): Buffer;
-function appendHeader(action: PacketType, id: string | UUID, data?: Buffer | number[] | number, port?: number): Buffer {
+function buildPacket(action: PacketType.CLOSE, id: UUID): Buffer;
+function buildPacket(action: PacketType.AUTH, auth: string, ports: number[]): Buffer;
+function buildPacket(action: PacketType.DATA, id: UUID, data: Buffer, port: number): Buffer;
+function buildPacket(action: PacketType, id: string | UUID, data?: Buffer | number[] | number, port?: number): Buffer {
   switch (action) {
     case PacketType.CLOSE: {
       if (typeof id === "string" && !isUUID(id)) throw new TypeError("Incorrect type for id")
@@ -78,12 +87,13 @@ function appendHeader(action: PacketType, id: string | UUID, data?: Buffer | num
       const sha1 = createHash('sha1').update(data).digest('hex');
       const sha512 = createHash('sha512').update(data).digest('hex');
       const header = Buffer.from(`${action} ${id} ${port} ${sha1} ${sha512}${config.separator}`);
-      return Buffer.concat([header, data]);
+      return Buffer.concat([header, data, AUTH_BUFFER]);
     }
   }
 }
 
 redirector.on('connection', main_socket => {
+  let isOnSplitupPhase: [false, null] | [true, Socket] = [false, null];
   c.info("MAIN", "Received connection from", main_socket.remoteAddress)
   main_socket = main_socket.setNoDelay(true);
   main_socket.on('data', data => {
@@ -115,7 +125,7 @@ redirector.on('connection', main_socket => {
         servers.set(port, server);
 
         server.on('connection', socket => {
-          socket.setNoDelay(true);
+          socket = socket.setNoDelay(true);
           c.info(`SOCKET_${port}`, "Received connection from", socket.remoteAddress)
           let id = randomUUID();
           while (connections.has(id)) id = randomUUID();
@@ -125,7 +135,7 @@ redirector.on('connection', main_socket => {
           socket.on('data', data => {
             c.debug(`SOCKET_${port}`, "Received data from", id)
             c.info(`SOCKET_${port}`, id, '->', main_socket.remoteAddress)
-            main_socket.write(appendHeader(PacketType.DATA, id, data, port), err => {
+            main_socket.write(buildPacket(PacketType.DATA, id, data, port), err => {
               if (err)
                 c.error(`SOCKET_${port}/ID_${id}`, "Error while sending data to client:", err)
               else c.debug(`SOCKET_${port}/ID_${id}`, "Sent data to client")
@@ -134,7 +144,7 @@ redirector.on('connection', main_socket => {
 
           socket.on('close', () => {
             c.warn(`SOCKET_${port}`, "Closing connection", id)
-            main_socket.write(appendHeader(PacketType.CLOSE, id), err => {
+            main_socket.write(buildPacket(PacketType.CLOSE, id), err => {
               if (err)
                 c.error(`SOCKET_${port}/ID_${id}`, "Error while sending data to client:", err)
               else c.debug(`SOCKET_${port}/ID_${id}`, "Sent data to client")
@@ -146,6 +156,11 @@ redirector.on('connection', main_socket => {
             c.warn(`SOCKET_${port}`, "Connection timed out", id)
             socket.end();
           })
+
+          socket.on('drain', () => {
+            c.warn(`SOCKET_${port}`, "Connection drained", id)
+            socket.resume();
+          })
         })
 
         server.listen(port, '0.0.0.0', BACKLOG, () => {
@@ -156,8 +171,18 @@ redirector.on('connection', main_socket => {
     else {
       let hex_raw = data.toString('hex')
       c.debug("MAIN", "Received data from client");
+      if (isOnSplitupPhase[0]) {
+        c.debug("MAIN", "Splitup phase hex data:", formatHex(hex_raw))
+        if (hex_raw.endsWith(AUTH_HEX)) {
+          isOnSplitupPhase[1].write(Buffer.from(hex_raw.slice(0, -AUTH_HEX.length), 'hex'))
+          isOnSplitupPhase = [false, null];
+          c.debug("MAIN", "Splitup phase ended")
+        }
+        else isOnSplitupPhase[1].write(data);
+        return;
+      }
       const [header, ...invalid] = data.toString('utf8').split(config.separator, 1);
-      const header_hex = data.toString('hex').split(Buffer.from(config.separator).toString('hex'), 1)[0]!;
+      const header_hex = data.toString('hex').split(SEPARATOR_HEX, 1)[0]!;
       invalid.length && c.warn("MAIN", "Received invalid packet")
       if (typeof header === "undefined" || header === "") {
         c.error("MAIN", "Invalid packet, ignoring")
@@ -173,7 +198,7 @@ redirector.on('connection', main_socket => {
       const socket = connections.get(id);
       if (typeof socket === "undefined") {
         c.warn("MAIN", "Connection was already closed, ignoring packet")
-        main_socket.write(appendHeader(PacketType.CLOSE, id), err => {
+        main_socket.write(buildPacket(PacketType.CLOSE, id), err => {
           if (err)
             c.error(`SOCKET_${port}/ID_${id}`, "Error while sending data to client:", err)
           else c.debug(`SOCKET_${port}/ID_${id}`, "Sent data to client")
@@ -185,35 +210,36 @@ redirector.on('connection', main_socket => {
       hex_raw = hex_raw.replace(header_hex, '');
       hex_raw = hex_raw.replace(Buffer.from(config.separator).toString('hex'), '');
       hex_raw = hex_raw.replace(body.toString('hex'), '');
-      c.debug(`SOCKET_${port}`, "Data:", chalk`{bgGray {red ${action_hex?.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()}} {yellow 20} {green ${id_hex?.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()}} {yellow 20} {blue ${sha1_dig_hex?.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()} {yellow 20} {magenta ${sha512_dig_hex?.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()}}} {yellow ${Buffer.from(config.separator).toString('hex').split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()}}} ${body.toString('hex').split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim()}`);
+      c.debug(`SOCKET_${port}`, "Data:", chalk`{bgGray {red ${formatHex(action_hex)}} {yellow 20} {green ${formatHex(id_hex)}} {yellow 20} {blue ${formatHex(sha1_dig_hex)} {yellow 20} {magenta ${formatHex(sha512_dig_hex)}}} {yellow ${formatHex(SEPARATOR_HEX)}}} ${formatHex(body.toString('hex'))}`);
       if (hex_raw !== '') {
         c.warn(`SOCKET_${port}`, "There is some data left in the buffer")
         c.warn(`SOCKET_${port}`, "Data:", hex_raw.split('').map((C, i) => i % 2 !== 0 ? C + ' ' : C).join('').trim())
       }
+      if (!body.toString('hex').endsWith(Buffer.from(config.auth).toString('hex'))) {
+        c.warn(`SOCKET_${port}`, "Just received a split packet, waiting for the rest")
+        isOnSplitupPhase = [true, socket];
+        socket.write(body);
+        return;
+      }
       const sha1 = createHash('sha1').update(body).digest('hex');
       const sha512 = createHash('sha512').update(body).digest('hex');
-      c.error(`SOCKET_${port}/${sha1_dig}`, "Buffer sizes:", data.length, data.length - header.length - config.separator.length, body.length)
+      c.error(`SOCKET_${port}/${sha1_dig}`, "Buffer sizes:", data.byteLength, data.byteLength - header.length - config.separator.length, body.byteLength)
       if (sha1 !== sha1_dig || sha512 !== sha512_dig) {
-        c.error(`SOCKET_${port}`, `Invalid checksum, ignoring (${id}/${sha1_dig})`)
         c.error(`SOCKET_${port}`, "Body length:", body.length)
         c.error(`SOCKET_${port}`, "Expected:", sha1_dig)
         c.error(`SOCKET_${port}`, "Got:     ", sha1)
         c.error(`SOCKET_${port}`, "Expected:", sha512_dig)
         c.error(`SOCKET_${port}`, "Got:     ", sha512)
+        c.error(`SOCKET_${port}`, `Invalid checksum, ignoring (${id}/${sha1_dig})`)
         return;
       } else {
         c.debug(`SOCKET_${port}`, "Checksums match")
-        c.debug(`SOCKET_${port}`, "Body length:", body.length)
-        c.debug(`SOCKET_${port}`, "Expected:", sha1_dig)
-        c.debug(`SOCKET_${port}`, "Got:     ", sha1)
-        c.debug(`SOCKET_${port}`, "Expected:", sha512_dig)
-        c.debug(`SOCKET_${port}`, "Got:     ", sha512)
       }
       if (typeof body === "undefined") {
         c.error(`SOCKET_${port}`, "Invalid packet, closing connection")
         return;
       }
-      if (!isPacketType(action)) {
+      if (!isPacketType(action) || action !== PacketType.DATA) {
         c.error(`SOCKET_${port}/ID_${id}`, "Invalid action, ignoring")
         return;
       }
@@ -248,6 +274,7 @@ redirector.on('connection', main_socket => {
 
   main_socket.on('drain', () => {
     c.warn("MAIN", "Buffer drained")
+    main_socket.resume();
   })
 
   main_socket.on('ready', () => {
