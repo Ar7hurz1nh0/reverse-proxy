@@ -177,6 +177,7 @@ redirector.on('connection', main_socket => {
       if (isOnSplitupPhase[0]) {
         c.debug("MAIN", "Splitup phase hex data:", formatHex(hex_raw))
         if (hex_raw.endsWith(AUTH_HEX)) {
+          c.warn("MAIN", "Received dead limit, splitup phase ended")
           isOnSplitupPhase[1] = Buffer.concat([isOnSplitupPhase[1], data.subarray(0, data.length - AUTH_BUFFER.length)]);
           const sha1 = createHash('sha1').update(isOnSplitupPhase[1]).digest('hex');
           const sha512 = createHash('sha512').update(isOnSplitupPhase[1]).digest('hex');
@@ -187,10 +188,19 @@ redirector.on('connection', main_socket => {
             isOnSplitupPhase[4].end();
             return;
           }
+          c.debug("MAIN", "Received valid hash, sending data to client")
+          isOnSplitupPhase[4].write(isOnSplitupPhase[1], err => {
+            if (err)
+              c.error("MAIN", "Error while sending data to client:", err)
+            else c.debug("MAIN", "Sent data to client")
+          })
           isOnSplitupPhase = [false, null];
           c.debug("MAIN", "Splitup phase ended")
         }
-        else isOnSplitupPhase[1] = Buffer.concat([isOnSplitupPhase[1], data]);
+        else {
+          c.debug("MAIN", "Received packet on splitup phase, appending data")
+          isOnSplitupPhase[1] = Buffer.concat([isOnSplitupPhase[1], data]);
+        }
         return;
       }
       const [header, ...invalid] = data.toString('utf8').split(config.separator, 1);
@@ -233,6 +243,7 @@ redirector.on('connection', main_socket => {
       hex_raw = hex_raw.replace(header_hex, '');
       hex_raw = hex_raw.replace(Buffer.from(config.separator).toString('hex'), '');
       hex_raw = hex_raw.replace(body.toString('hex'), '');
+      hex_raw = hex_raw.replace(AUTH_HEX, '');
       c.debug(`SOCKET_${port}`, "Data:", chalk`{bgGray {red ${formatHex(action_hex)}} {yellow 20} {green ${formatHex(id_hex)}} {yellow 20} {blue ${formatHex(sha1_dig_hex)} {yellow 20} {magenta ${formatHex(sha512_dig_hex)}}} {yellow ${formatHex(SEPARATOR_HEX)}}} ${formatHex(body.toString('hex'))}`);
       if (hex_raw !== '') {
         c.warn(`SOCKET_${port}`, "There is some data left in the buffer")
