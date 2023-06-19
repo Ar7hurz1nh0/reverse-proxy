@@ -93,7 +93,7 @@ function buildPacket(action: PacketType, id: string | UUID, data?: Buffer | numb
 }
 
 redirector.on('connection', main_socket => {
-  let isOnSplitupPhase: [false, null] | [true, Socket] = [false, null];
+  let isOnSplitupPhase: [false, null] | [true, Buffer, string, string, Socket] = [false, null];
   c.info("MAIN", "Received connection from", main_socket.remoteAddress)
   main_socket = main_socket.setNoDelay(true);
   main_socket.on('data', data => {
@@ -174,11 +174,20 @@ redirector.on('connection', main_socket => {
       if (isOnSplitupPhase[0]) {
         c.debug("MAIN", "Splitup phase hex data:", formatHex(hex_raw))
         if (hex_raw.endsWith(AUTH_HEX)) {
-          isOnSplitupPhase[1].write(Buffer.from(hex_raw.slice(0, -AUTH_HEX.length), 'hex'))
+          isOnSplitupPhase[1] = Buffer.concat([isOnSplitupPhase[1], data.subarray(0, data.length - AUTH_BUFFER.length)]);
+          const sha1 = createHash('sha1').update(isOnSplitupPhase[1]).digest('hex');
+          const sha512 = createHash('sha512').update(isOnSplitupPhase[1]).digest('hex');
+          if (sha1 !== isOnSplitupPhase[2] || sha512 !== isOnSplitupPhase[3]) {
+            c.error("MAIN", "Invalid hash, closing connection")
+            c.error("MAIN", "Expected:", isOnSplitupPhase[2], isOnSplitupPhase[3])
+            c.error("MAIN", "Received:", sha1, sha512)
+            isOnSplitupPhase[4].end();
+            return;
+          }
           isOnSplitupPhase = [false, null];
           c.debug("MAIN", "Splitup phase ended")
         }
-        else isOnSplitupPhase[1].write(data);
+        else isOnSplitupPhase[1] = Buffer.concat([isOnSplitupPhase[1], data]);
         return;
       }
       const [header, ...invalid] = data.toString('utf8').split(config.separator, 1);
@@ -207,8 +216,13 @@ redirector.on('connection', main_socket => {
       }
       if (!hex_raw.endsWith(AUTH_HEX)) {
         c.warn("MAIN", "Just received a split packet, waiting for the rest")
-        isOnSplitupPhase = [true, socket];
-        socket.write(data.subarray(header.length + config.separator.length));
+        isOnSplitupPhase = [
+          true,
+          data.subarray(header.length + config.separator.length),
+          sha1_dig ?? '',
+          sha512_dig ?? '',
+          socket,
+        ];
         return;
       }
       const body = data.subarray(header.length + config.separator.length, data.length - AUTH_BUFFER.length);
