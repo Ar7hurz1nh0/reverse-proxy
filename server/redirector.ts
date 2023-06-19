@@ -45,9 +45,10 @@ const connections: Map<UUID, Socket> = new Map();
 
 function formatHex(s?: string): string {
   if (!s) return '';
-  const hex = s.split('')
-  for (let i = 0; i < hex.length; i += 2) hex.splice(i, 0, ' ');
-  return hex.join('').trim();
+  for (let i = 2; i < s.length; i += 3) {
+    s = s.slice(0, i) + ' ' + s.slice(i);
+  }
+  return s;
 }
 
 function isPacketType(data: unknown): data is PacketType {
