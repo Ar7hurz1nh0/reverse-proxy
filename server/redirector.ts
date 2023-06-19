@@ -209,8 +209,8 @@ redirector.on('connection', main_socket => {
         c.warn("MAIN", "Connection was already closed, ignoring packet")
         main_socket.write(buildPacket(PacketType.CLOSE, id), err => {
           if (err)
-            c.error(`SOCKET_${port}/ID_${id}`, "Error while sending data to client:", err)
-          else c.debug(`SOCKET_${port}/ID_${id}`, "Sent data to client")
+            c.error("MAIN", "Error while sending data to client:", err)
+          else c.debug("MAIN", "Sent data to client")
         })
         return;
       }
